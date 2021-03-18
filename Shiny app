@@ -1,0 +1,632 @@
+library(shiny)
+library(datasets)
+library(rhandsontable)
+library(plyr)
+library(ggplot2)
+library(reshape2)
+library(stringr)
+
+ui <- shinyUI(fluidPage(
+  titlePanel("Create a Scatter Plot Combined With a Bar or a Box Plot"),
+  tabsetPanel(
+    tabPanel("Upload CSV File",
+             titlePanel(""),
+             sidebarLayout(
+               sidebarPanel(
+                 
+                 fileInput('file1', span(tags$b("Choose CSV File",  style = "color:darkblue")),
+                           accept=c('text/csv',
+                                    'text/comma-separated-values,text/plain',
+                                    '.csv')),
+                 
+                 checkboxInput('header', 'Header', TRUE),
+                 radioButtons('sep', 'Separator',
+                              c(Comma=',',
+                                Semicolon=';',
+                                Tab='\t'),
+                              ','),
+                 radioButtons('quote', 'Quote',
+                              c(None='',
+                                'Double Quote'='"',
+                                'Single Quote'="'"),
+                              '"'),
+                 
+               ),
+               
+               mainPanel(
+                 h4(tags$b(span("Plot", style = "color:darkblue"), h6("Error bars represent SD. Save image from a right-click menu"))),
+                 plotOutput('plotTab1', height = "100%"),
+                 br(),
+                 
+                 fluidRow( column(3, wellPanel(h5("Build colored barplot"),
+                                               actionButton("build", "Build"))),
+                           column(3, wellPanel( h5("Build B&W barplot"),
+                                                actionButton("buildBW", "Build B&W"))),
+                           column(3, wellPanel(h5("Build colored box plot"),
+                                               actionButton("buildBox", "Build boxplot"))),
+                           column(3, wellPanel(h5("Build B&W box plot"),
+                                               actionButton("buildBW_Box", "Build B&W boxplot")))),
+                 
+                # wellPanel(
+                 #  h4("Export Plot"),
+                  # downloadButton('ExportPlot', 'Export as png')
+                 #) ,
+                 
+                 wellPanel(
+                   h4('One-way ANOVA summary'),
+                   verbatimTextOutput('aovSummary'),
+                   actionButton("anova", "Calculate ANOVA")
+                 ) ,
+                 
+                 wellPanel(
+                   h4('Tukey HSD summary'),
+                   verbatimTextOutput('TukeySummary'),
+                   actionButton("Tukey", "Calculate Tukey"),
+                 ),
+                 br(),
+                 h4(tags$b("Uploaded Table", style = "color:darkblue")),
+                 tableOutput('contents'),
+                 
+                 hr(),
+                 print(h6("~~~ Online Generator For ScatterPlots Combined With BarPlots or BoxPlots with ANOVA Statistics ~~~~ DotPlot with Bar Builder Web App ~~~~"))
+                 
+                 
+               )
+             )
+    ),
+    ############ Tab2 ################################################ Tab2 #########################################
+   
+    tabPanel(span(tags$b("Enter Data Manually",  style = "color:red")),
+             pageWithSidebar(
+               headerPanel(''),
+               sidebarPanel(
+                 textInput("colnames", span("Enter column names (separated by comma)", style = "color:darkblue"),
+                           value="", placeholder = "e.g. Var1, Var2, Var3, etc"),
+                 h5(tags$b("Enter data", style = "color:darkblue")),
+                 h5("Add data by typing or by copy-paste (Ctrl-c/Ctrl-v). Add/delete columns/rows from a right-click menu."),
+                 h5(tags$b("Decimal separator is a dot .", style = "color:darkred")),
+                 rHandsontableOutput('table'),
+                 
+                 br(),
+                 
+                 wellPanel(
+                   h4("Erase data"),
+                   actionButton("recalc", "Erase")
+                 ) ,
+                 
+               ),
+               mainPanel(
+                 h4(tags$b(span("Plot", style = "color:darkblue"), h6("Error bars represent SD. Save image from a right-click menu"))),
+                 plotOutput("plotTab2", height = "100%"),
+                 
+                 fluidRow( column(3, wellPanel(h5("Build colored barplot"),
+                                               actionButton("buildTab2", "Build"))),
+                           column(3, wellPanel( h5("Build B&W barplot"),
+                                                actionButton("buildBWTab2", "Build B&W"))),
+                           column(3, wellPanel(h5("Build colored box plot"),
+                                               actionButton("buildBoxTab2", "Build boxplot"))),
+                           column(3, wellPanel(h5("Build B&W box plot"),
+                                               actionButton("buildBW_BoxTab2", "Build B&W boxplot")))),
+                 
+                 #wellPanel(
+                 # h4("Export Plot"),
+                 #downloadButton('ExportPlotTab2', 'Export as png')
+                 #) ,
+               
+                 wellPanel(
+                 h4('One-way ANOVA summary'),
+                 verbatimTextOutput('aovSummaryTab2'),
+                 actionButton("anovaTab2", "Calculate ANOVA"),
+                             ),
+             
+                 wellPanel(
+                 h4('Tukey HSD summary'),
+                 verbatimTextOutput('TukeySummaryTab2'),
+                 actionButton("TukeyTab2", "Calculate Tukey"),
+                           ),
+                 
+                 hr(),
+                 print(h6("~~~ Create Scatter Plots Combined With Bar or Box Plots together with ANOVA Statistics ~~~~ Dot Plot with Bar Builder Web App ~~~~"))
+               )
+             )
+    )
+   
+  )
+)
+)
+
+rowNames <- c(sprintf("[%d]",seq(1:20)), "Means")
+defaultDF <- data.frame(
+  row.names = rowNames,
+  A = rep(NA_integer_, nrow=21),
+  B = rep(NA_integer_, 21),
+  C = rep(NA_integer_, 21),
+  stringsAsFactors = FALSE
+)
+
+server <- shinyServer(function(input, output, session) {
+ 
+  imp_data <- reactive({  # create a DF for the imported CSV
+    req(input$file1)
+    inFile <- input$file1
+    df <- read.csv(inFile$datapath, header = input$header, sep = input$sep,
+                   quote = input$quote)
+        return(df)
+  })
+ 
+  output$contents <- renderTable({
+    imp_data()
+  })
+ 
+  #++++++++++++ Build COLORED BAR Plot with scatter +++++++++++++++++++++++++++++++++++++++++++++++++
+  observeEvent(input$build, {
+  output$plotTab1 <- renderPlot({
+    DF1 <- imp_data()               # transform data in columns into ggplot-compatible formate with melt function
+    DF1$id = 1:nrow(DF1)
+    require(reshape2)
+    DF1 = melt(DF1, id.vars = "id")
+   
+    #+++++++++++++++++++++++++
+    # Function to calculate the mean and the standard deviation
+    # for each group
+    #+++++++++++++++++++++++++
+    #data = dataframe (i.e. DF1)
+    # varname : the name of a column containing the variable
+    #to be summariezed
+    # groupnames : vector of column names to be used as
+    # grouping variables
+   
+    data_summary <- function(data, varname, groupnames){
+      require(plyr)
+      summary_func <- function(x, col){
+        c(mean = mean(x[[col]], na.rm=TRUE),
+          sd = sd(x[[col]], na.rm=TRUE))
+      }
+      data_sum<-ddply(data, groupnames, .fun=summary_func,
+                      varname)
+      data_sum <- rename(data_sum, c("mean" = varname))
+      return(data_sum)
+    }
+   
+    DF2 <- data_summary(DF1, varname="value",
+                        groupnames=c("variable"))
+    DF2$variable=as.factor(DF2$variable)
+   
+   
+    #+++++++++++++GGPLOT function with ScatterPlot overlayed over BarPlot ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    ggplot(DF2, aes(x=variable, y=value, fill=variable)) +
+      geom_bar(stat="identity", color="darkgray", alpha = .5,
+               position=position_dodge()) + scale_fill_brewer(palette = "Dark2") +
+     
+      geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                    position=position_dodge(.9)) + geom_jitter(data=DF1, shape=16, size = 5, alpha = .7, position=position_jitter(0.2)) +
+      theme(axis.line = element_line(colour = "black")) + theme(panel.background = element_blank()) +
+      theme(axis.text=element_text(size=14),
+            axis.title=element_text(size=16,face="bold"))+ theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
+   
+  }, height = 600, width = 800)
+  })
+ 
+  #++++++++++++ Build B&W BAR Plot with scatter +++++++++++++++++++++++++++++++++++++++++++++++++
+  observeEvent(input$buildBW, {
+    output$plotTab1 <- renderPlot({
+      DF1 <- imp_data()
+      DF1$id = 1:nrow(DF1)
+      require(reshape2)
+      DF1 = melt(DF1, id.vars = "id")
+      data_summary <- function(data, varname, groupnames){
+        require(plyr)
+        summary_func <- function(x, col){
+          c(mean = mean(x[[col]], na.rm=TRUE),
+            sd = sd(x[[col]], na.rm=TRUE))
+        }
+        data_sum<-ddply(data, groupnames, .fun=summary_func,
+                        varname)
+        data_sum <- rename(data_sum, c("mean" = varname))
+        return(data_sum)
+      }
+     
+      DF2 <- data_summary(DF1, varname="value",
+                          groupnames=c("variable"))
+      DF2$variable=as.factor(DF2$variable)
+     
+      ggplot(DF2, aes(x=variable, y=value, group=variable)) +
+        geom_bar(stat="identity", color="gray", alpha = .4,
+                 position=position_dodge()) +
+        geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                      position=position_dodge(.9)) + geom_jitter(data=DF1, aes(shape=variable), size = 5, alpha = .7, position=position_jitter(0.2)) +
+        theme(axis.line = element_line(colour = "black")) + theme(panel.background = element_blank()) +
+        theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold")) + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
+     
+    }, height = 600, width = 800)
+  })
+ 
+ 
+  #+++++++++++++++++++++++ Build colored BOX Plot ++++++++++++++++++++++++++++++++++++++
+  observeEvent(input$buildBox, {
+    output$plotTab1 <- renderPlot({
+      DF1 <- imp_data()
+      DF1$id = 1:nrow(DF1)
+      require(reshape2)
+      DF1 = melt(DF1, id.vars = "id")
+     
+     
+      ggplot(DF1, aes(x = variable, y = value, fill = variable)) + geom_boxplot(outlier.shape = NA) + geom_jitter(shape=16, size=5, alpha = .7, position=position_jitter(0.2)) +
+       
+       
+        theme(axis.line = element_line(colour = "black")) + theme(panel.background = element_blank()) +
+        theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold")) + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
+     
+    }, height = 600, width = 800)
+  })
+ 
+  #+++++++++++++++++++++++ Build B&W BOX Plot ++++++++++++++++++++++++++++++++++++++
+  observeEvent(input$buildBW_Box, {
+    output$plotTab1 <- renderPlot({
+      DF1 <- imp_data()
+      DF1$id = 1:nrow(DF1)
+      require(reshape2)
+      DF1 = melt(DF1, id.vars = "id")
+     
+     
+      ggplot(DF1, aes(x = variable, y = value, group = variable)) + geom_boxplot(outlier.shape = NA) + geom_jitter(aes(shape=variable), size=5, alpha = .7, position=position_jitter(0.2)) +
+        theme(axis.line = element_line(colour = "black")) + theme(panel.background = element_blank()) +
+        theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold")) + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
+     
+    }, height = 600, width = 800)
+   
+  })
+ 
+  #++++++++++++++++++++++++Calculate ANOVA
+  observeEvent(input$anova, {
+    DF1 <- imp_data()
+   
+    output$aovSummary = renderPrint({
+     
+     
+      DF1$id = 1:nrow(DF1)
+      require(reshape2)
+      DF1 = melt(DF1, id.vars = "id")
+     
+      print(summary(aov(value ~ variable, data = DF1 )))
+    })
+  })
+ 
+  #+++++++++++++++++++++++++Calculate Tukey HSD
+  observeEvent(input$Tukey, {
+    DF1 <- imp_data()
+   
+    output$TukeySummary = renderPrint({
+     
+     
+      DF1$id = 1:nrow(DF1)
+      require(reshape2)
+      DF1 = melt(DF1, id.vars = "id")
+     
+      res.aov <- (aov(value ~ variable, data = DF1 ))
+      print(TukeyHSD(res.aov))
+    })
+  })
+ 
+  #+++++++++++++++++++++++Export PNG+++++++++++++++++++++++++
+ 
+  #output$ExportPlot <- downloadHandler(
+   
+   # filename = 'BoxPlot.png',
+    #content = function(file) {
+     
+     # png(file,
+      #    width = 800*8,
+       #   height = 600*8,
+        #  res = 72*8) # open the png device
+      #output$plotTab1 # draw the plot
+      #dev.off()
+    #})
+ 
+ ######## Tab2 elements ##################################################### Tab2 elements #######################################
+  values <- reactiveValues(data = defaultDF) ## assign it with NULL
+ 
+  ## button press resets now the data frame
+  observeEvent(input$recalc, {
+    values$data[] <- NA_integer_
+  })
+ 
+  observe({    
+    req(input$table)
+    DF <- hot_to_r(input$table)
+    DF[setdiff(rowNames, "Means"),]
+    DF["Means",] <- colMeans(DF[setdiff(rowNames, "Means"),], na.rm = TRUE)
+    values$data <- DF
+  })
+ 
+  output$table <- renderRHandsontable({
+    req(values$data)
+    rhandsontable(values$data, rowHeaderWidth = 50, useTypes = FALSE, colHeaders=str_trim(unlist(strsplit(input$colnames,",")))) %>%
+      hot_row(nrow(values$data), readOnly = TRUE) %>%
+      hot_cols(manualColumnResize=TRUE,
+               manualRowResize = true,
+               colWidths = 50,
+               rowHeights = 50)
+  })
+ 
+ 
+ 
+ 
+  observeEvent(input$buildTab2, {
+   
+   
+    output$plotTab2 <- renderPlot({
+      if(input$colnames == "")  #directs based on input of colnames, if no input DF1 takes column names from original dataframe
+      {
+        DF1 <- isolate(values$data)
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+       
+       
+        data_summary <- function(data, varname, groupnames){
+          require(plyr)
+          summary_func <- function(x, col){
+            c(mean = mean(x[[col]], na.rm=TRUE),
+              sd = sd(x[[col]], na.rm=TRUE))
+          }
+          data_sum<-ddply(data, groupnames, .fun=summary_func,
+                          varname)
+          data_sum <- rename(data_sum, c("mean" = varname))
+          return(data_sum)
+        }
+       
+        DF2 <- data_summary(DF1, varname="value",
+                            groupnames=c("variable"))
+        DF2$variable=as.factor(DF2$variable)
+      }
+     
+      else  #if column names are entered this results in colnames function call
+      {
+        DF1 <- isolate(values$data)
+        colnames(DF1) = str_trim(unlist(strsplit(isolate(input$colnames),",")))
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+       
+        data_summary <- function(data, varname, groupnames){
+          require(plyr)
+          summary_func <- function(x, col){
+            c(mean = mean(x[[col]], na.rm=TRUE),
+              sd = sd(x[[col]], na.rm=TRUE))
+          }
+          data_sum<-ddply(data, groupnames, .fun=summary_func,
+                          varname)
+          data_sum <- rename(data_sum, c("mean" = varname))
+          return(data_sum)
+        }
+       
+        DF2 <- data_summary(DF1, varname="value",
+                            groupnames=c("variable"))
+        DF2$variable=as.factor(DF2$variable)
+      }
+     
+     
+      ggplot(DF2, aes(x=variable, y=value, fill=variable)) +
+        geom_bar(stat="identity", color="darkgray", alpha = .5,
+                 position=position_dodge()) + scale_fill_brewer(palette = "Dark2") +
+       
+        geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                      position=position_dodge(.9)) + geom_jitter(data=DF1, shape=16, size = 5, alpha = .7, position=position_jitter(0.2)) +
+        theme(axis.line = element_line(colour = "black")) + theme(panel.background = element_blank()) +
+        theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold"))+ theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
+    }, height = 600, width = 800)
+  })
+ 
+ 
+  ##+++++++++++++++++ Build B&W Bar plot with differntly shaped individul values +++++++++++++++++++++++++++++++++++++++++
+ 
+  observeEvent(input$buildBWTab2, {
+   
+    output$plotTab2 <- renderPlot({
+      if(input$colnames == "")  #directs based on input of colnames, if no input DF1 takes column names from original dataframe
+      {
+        DF1 <- isolate(values$data)
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+       
+       
+        data_summary <- function(data, varname, groupnames){
+          require(plyr)
+          summary_func <- function(x, col){
+            c(mean = mean(x[[col]], na.rm=TRUE),
+              sd = sd(x[[col]], na.rm=TRUE))
+          }
+          data_sum<-ddply(data, groupnames, .fun=summary_func,
+                          varname)
+          data_sum <- rename(data_sum, c("mean" = varname))
+          return(data_sum)
+        }
+       
+        DF2 <- data_summary(DF1, varname="value",
+                            groupnames=c("variable"))
+        DF2$variable=as.factor(DF2$variable)
+      }
+     
+      else  #if column names are entered this results in colnames function call
+      {
+        DF1 <- isolate(values$data)
+        colnames(DF1) = str_trim(unlist(strsplit(isolate(input$colnames),",")))
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+       
+        data_summary <- function(data, varname, groupnames){
+          require(plyr)
+          summary_func <- function(x, col){
+            c(mean = mean(x[[col]], na.rm=TRUE),
+              sd = sd(x[[col]], na.rm=TRUE))
+          }
+          data_sum<-ddply(data, groupnames, .fun=summary_func,
+                          varname)
+          data_sum <- rename(data_sum, c("mean" = varname))
+          return(data_sum)
+        }
+       
+        DF2 <- data_summary(DF1, varname="value",
+                            groupnames=c("variable"))
+        DF2$variable=as.factor(DF2$variable)
+      }
+     
+     
+      ggplot(DF2, aes(x=variable, y=value, group=variable)) +
+        geom_bar(stat="identity", color="gray", alpha = .4,
+                 position=position_dodge()) +
+        geom_errorbar(aes(ymin=value-sd, ymax=value+sd), width=.2,
+                      position=position_dodge(.9)) + geom_jitter(data=DF1, aes(shape=variable), size = 5, alpha = .7, position=position_jitter(0.2)) +
+        theme(axis.line = element_line(colour = "black")) + theme(panel.background = element_blank()) +
+        theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold")) + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
+    }, height = 600, width = 800)
+  })
+ 
+ 
+  #++++++++++++++++++++++++++++++++++++++ Build colored BoxPlot++++++++++++++++++++++++++++++++++++++
+  observeEvent(input$buildBoxTab2, {
+    output$plotTab2 <- renderPlot({
+      if(input$colnames == "")  #directs based on input of colnames,
+      {
+        DF1 <- isolate(values$data)
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+      }
+      else  #if column names are entered this results in colnames function call
+      {
+        DF1 <- isolate(values$data)
+        colnames(DF1) = str_trim(unlist(strsplit(isolate(input$colnames),",")))
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+      }
+     
+      ggplot(DF1, aes(x = variable, y = value, fill = variable)) + geom_boxplot(outlier.shape = NA) + geom_jitter(shape=16, size=5, alpha = .7, position=position_jitter(0.2)) +
+       
+       
+        theme(axis.line = element_line(colour = "black")) + theme(panel.background = element_blank()) +
+        theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold")) + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
+     
+    }, height = 600, width = 800)
+  })
+ 
+  #+++++++++++++++++++++++ Build B&W BOX Plot ++++++++++++++++++++++++++++++++++++++
+  observeEvent(input$buildBW_BoxTab2, {
+    output$plotTab2 <- renderPlot({
+      if(input$colnames == "")  #directs based on input of colnames,
+      {
+        DF1 <- isolate(values$data)
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+      }
+      else  #if column names are entered this results in colnames function call
+      {
+        DF1 <- isolate(values$data)
+        colnames(DF1) = str_trim(unlist(strsplit(isolate(input$colnames),",")))
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+      }
+     
+      ggplot(DF1, aes(x = variable, y = value, group = variable)) + geom_boxplot(outlier.shape = NA) + geom_jitter(aes(shape=variable), size=5, alpha = .7, position=position_jitter(0.2)) +
+        theme(axis.line = element_line(colour = "black")) + theme(panel.background = element_blank()) +
+        theme(axis.text=element_text(size=14),
+              axis.title=element_text(size=16,face="bold")) + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
+     
+    }, height = 600, width = 800)
+   
+  })
+ 
+  #++++++++++++++++++++++++++++++++++++++++Calculate ANOVA for Tab2++++++++++++++++++++++++++++++++++++++++++++++++++++
+  observeEvent(input$anovaTab2, {
+    DF1 <- isolate(values$data)
+   
+    output$aovSummaryTab2 = renderPrint({
+     
+      row.names.remove <- c("Means") #to remove "means" row
+      DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+      DF1$id = 1:nrow(DF1)
+      require(reshape2)
+      DF1 = melt(DF1, id.vars = "id")
+     
+      print(summary(aov(value ~ variable, data = DF1 )))
+    })
+  })
+ 
+ 
+  observeEvent(input$TukeyTab2, {
+   
+   
+    output$TukeySummaryTab2 = renderPrint({
+      if(input$colnames == "")  #directs based on input of colnames,
+      {
+        DF1 <- isolate(values$data)
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+      }
+     
+      else  #if column names are entered this results in colnames function call
+      {
+        DF1 <- isolate(values$data)
+        colnames(DF1) = str_trim(unlist(strsplit(isolate(input$colnames),",")))
+        row.names.remove <- c("Means") #to remove "means" row
+        DF1 <- DF1[!(row.names(DF1) %in% row.names.remove), ] # removes "means" row
+        DF1$id = 1:nrow(DF1)
+        require(reshape2)
+        DF1 = melt(DF1, id.vars = "id")
+      }
+     
+      res.aov <- (aov(value ~ variable, data = DF1 ))
+      print(TukeyHSD(res.aov))
+     
+    })
+   
+  })
+ 
+  #Export PNG for Tab2
+  #output$ExportPlotTab2 = downloadHandler(
+   # filename = 'BoxPlot.png',
+    #content = function(file) {
+     
+     # png(file,
+      #    width = 800*8,
+       #   height = 600*8,
+        #  res = 72*8) # open the png device
+      #boxplot(values$data, names = str_trim(unlist(strsplit(isolate(input$colnames),",")))) # draw the plot
+      #dev.off() # turn the device off
+     
+    #})
+ 
+})
+
+shinyApp(ui, server)
